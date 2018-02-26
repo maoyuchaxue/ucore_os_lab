@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <console.h>
 #include <kdebug.h>
+#include <picirq.h>
 
 #define TICK_NUM 100
 
@@ -46,6 +47,24 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+    
+    extern uintptr_t __vectors[];
+    
+    int i;
+    for (i = 0; i < 256; i++) {
+        if (i == T_SYSCALL) {
+            SETGATE(idt[i], 1, KERNEL_CS, __vectors[i], DPL_USER);
+        } else {
+            SETGATE(idt[i], 0, KERNEL_CS, __vectors[i], DPL_KERNEL);
+        }
+    }
+    lidt(&idt_pd);
+}
+
+static void check_syscall(struct trapframe *tf) {
+    asm volatile("subl $0x10, %esp");
+    asm volatile("int $121");
+    asm volatile("addl $0x10, %esp");
 }
 
 static const char *
@@ -138,6 +157,8 @@ print_regs(struct pushregs *regs) {
 static void
 trap_dispatch(struct trapframe *tf) {
     char c;
+    struct trapframe *tmp_frame;
+    uint32_t *ret_esp = (uint32_t *)(tf) - 1;
 
     switch (tf->tf_trapno) {
     case IRQ_OFFSET + IRQ_TIMER:
@@ -147,6 +168,11 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks++;
+        if (ticks == TICK_NUM) {
+            print_ticks();
+            ticks = 0;
+        }
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
@@ -158,8 +184,28 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
+        tf->tf_cs = USER_CS;
+        tf->tf_ds = USER_DS;
+        tf->tf_ss = USER_DS;
+        tf->tf_es = USER_DS;
+        tf->tf_fs = USER_DS;
+        tf->tf_gs = USER_DS;
+        tf->tf_esp = (uint32_t)tf + sizeof(struct trapframe) - 8;
+        tf->tf_eflags = tf->tf_eflags | FL_IOPL_3;
+        break;
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+        break;
+    case T_SYSCALL:
+        tmp_frame = (struct trapframe *)((uint32_t)tf->tf_esp - sizeof(struct trapframe));
+        __memcpy(tmp_frame, tf, sizeof(struct trapframe));
+        tmp_frame->tf_cs = KERNEL_CS;
+        tmp_frame->tf_ds = KERNEL_DS;
+        tmp_frame->tf_es = KERNEL_DS;
+        tmp_frame->tf_fs = KERNEL_DS;
+        tmp_frame->tf_gs = KERNEL_DS;
+        tmp_frame->tf_eflags = tf->tf_eflags | FL_IOPL_0;
+        *ret_esp = (uint32_t)tmp_frame;
+        // check_syscall(tf);
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:
