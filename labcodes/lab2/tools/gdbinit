@@ -1,3 +1,7 @@
 file bin/kernel
 target remote :1234
+define hook-stop
+x/i $pc
+end
 break kern_init
+break *0x7d80
