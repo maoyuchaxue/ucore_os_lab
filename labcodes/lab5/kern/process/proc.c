@@ -103,6 +103,16 @@ alloc_proc(void) {
      *       uint32_t flags;                             // Process flag
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
+     proc->state = PROC_UNINIT;
+     proc->pid = -1;
+     proc->runs = 0;
+     proc->kstack = 0;
+     proc->need_resched = 0;
+     proc->parent = NULL;
+     proc->mm = NULL;
+     proc->tf = NULL;
+     proc->cr3 = boot_cr3;
+     proc->flags = 0;
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
@@ -388,12 +398,20 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
      *   nr_process:   the number of process set
      */
 
-    //    1. call alloc_proc to allocate a proc_struct
-    //    2. call setup_kstack to allocate a kernel stack for child process
-    //    3. call copy_mm to dup OR share mm according clone_flag
-    //    4. call copy_thread to setup tf & context in proc_struct
-    //    5. insert proc_struct into hash_list && proc_list
-    //    6. call wakeup_proc to make the new child process RUNNABLE
+    proc = alloc_proc();  //    1. call alloc_proc to allocate a proc_struct
+    proc->parent = current;
+
+    int pid = get_pid();
+    proc->pid = pid;
+    setup_kstack(proc);  //    2. call setup_kstack to allocate a kernel stack for child process
+    copy_mm(clone_flags, proc);  //    3. call copy_mm to dup OR share mm according clone_flag
+    copy_thread(proc, stack, tf);  //    4. call copy_thread to setup tf & context in proc_struct
+    hash_proc(proc);
+    list_add(&proc_list, &(proc->list_link));  //    5. insert proc_struct into hash_list && proc_list
+    nr_process++;
+    wakeup_proc(proc);  //    6. call wakeup_proc to make the new child process RUNNABLE
+
+    ret = pid;
     //    7. set ret vaule using child proc's pid
 
 	//LAB5 YOUR CODE : (update LAB4 steps)
