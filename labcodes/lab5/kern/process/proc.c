@@ -119,6 +119,8 @@ alloc_proc(void) {
      *       uint32_t wait_state;                        // waiting state
      *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
 	 */
+     proc->wait_state = 0;
+     proc->cptr = proc->yptr = proc->optr = NULL;
     }
     return proc;
 }
@@ -400,15 +402,14 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
 
     proc = alloc_proc();  //    1. call alloc_proc to allocate a proc_struct
     proc->parent = current;
-
     int pid = get_pid();
     proc->pid = pid;
     setup_kstack(proc);  //    2. call setup_kstack to allocate a kernel stack for child process
     copy_mm(clone_flags, proc);  //    3. call copy_mm to dup OR share mm according clone_flag
     copy_thread(proc, stack, tf);  //    4. call copy_thread to setup tf & context in proc_struct
     hash_proc(proc);
-    list_add(&proc_list, &(proc->list_link));  //    5. insert proc_struct into hash_list && proc_list
-    nr_process++;
+    set_links(proc);   //    5. insert proc_struct into hash_list && proc_list
+
     wakeup_proc(proc);  //    6. call wakeup_proc to make the new child process RUNNABLE
 
     ret = pid;
@@ -620,6 +621,11 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf_eip should be the entry point of this binary program (elf->e_entry)
      *          tf_eflags should be set to enable computer to produce Interrupt
      */
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = USTACKTOP;
+    tf->tf_eip = elf->e_entry;
+    tf->tf_eflags = FL_IF;
     ret = 0;
 out:
     return ret;
