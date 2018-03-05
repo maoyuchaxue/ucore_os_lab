@@ -136,7 +136,7 @@ alloc_proc(void) {
      proc->rq = NULL;
      proc->time_slice = 0;
      proc->lab6_stride = 0;
-     proc->lab6_priority = 0;
+     proc->lab6_priority = 1;
     }
     return proc;
 }
