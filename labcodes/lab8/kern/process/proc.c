@@ -140,7 +140,9 @@ alloc_proc(void) {
      proc->time_slice = 0;
      proc->lab6_stride = 0;
      proc->lab6_priority = 1;
-    //LAB8:EXERCISE2 YOUR CODE HINT:need add some code to init fs in proc_struct, ...
+    //LAB8:EXERCISE2 YOUR CODE HINT:need add some code to init fs in proc_struct, ..
+    
+     proc->filesp = NULL;
     }
     return proc;
 }
@@ -469,6 +471,7 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     proc->pid = pid;
     setup_kstack(proc);  //    2. call setup_kstack to allocate a kernel stack for child process
     copy_mm(clone_flags, proc);  //    3. call copy_mm to dup OR share mm according clone_flag
+    copy_files(clone_flags, proc);
     copy_thread(proc, stack, tf);  //    4. call copy_thread to setup tf & context in proc_struct
     hash_proc(proc);
     set_links(proc);   //    5. insert proc_struct into hash_list && proc_list
@@ -596,6 +599,170 @@ load_icode(int fd, int argc, char **kargv) {
      * (7) setup trapframe for user environment
      * (8) if up steps failed, you should cleanup the env.
      */
+    if (current->mm != NULL) {
+        panic("load_icode: current->mm must be empty.\n");
+    }
+
+    int ret = -E_NO_MEM;
+    struct mm_struct *mm = mm_create();
+    if (mm == 0) {
+        goto bad_mm;
+    }
+    if (setup_pgdir(mm) != 0) {
+        goto bad_pgdir_cleanup_mm;
+    }
+
+    struct elfhdr elf;
+    load_icode_read(fd, (void *)&elf, sizeof(struct elfhdr), 0);
+
+    if (elf.e_magic != ELF_MAGIC) {
+        ret = -E_INVAL_ELF;
+        goto bad_elf_cleanup_pgdir;
+    }
+
+    struct proghdr prog;
+    uint32_t vm_flags, perm;
+    struct Page *page;
+    int prog_num = elf.e_phnum;
+    int i;
+    for (i = 0; i < prog_num; i++) {
+
+        cprintf("get prognum %d of %d\n", i, prog_num);
+        uint32_t prog_offset = elf.e_phoff + i * sizeof(struct proghdr);
+        load_icode_read(fd, (void *)&prog, sizeof(struct proghdr), prog_offset);
+
+        if (prog.p_type != ELF_PT_LOAD) {
+            continue ;
+        }
+        if (prog.p_filesz > prog.p_memsz) {
+            ret = -E_INVAL_ELF;
+            goto bad_cleanup_mmap;
+        }
+        if (prog.p_filesz == 0) {
+            continue ;
+        }
+
+        vm_flags = 0, perm = PTE_U;
+        if (prog.p_flags & ELF_PF_X) vm_flags |= VM_EXEC;
+        if (prog.p_flags & ELF_PF_W) vm_flags |= VM_WRITE;
+        if (prog.p_flags & ELF_PF_R) vm_flags |= VM_READ;
+        if (vm_flags & VM_WRITE) perm |= PTE_W;
+        if ((ret = mm_map(mm, prog.p_va, prog.p_memsz, vm_flags, NULL)) != 0) {
+            goto bad_cleanup_mmap;
+        }
+        
+        size_t off, size;
+        uintptr_t start = prog.p_va, end, la = ROUNDDOWN(start, PGSIZE);
+        uintptr_t from_offset = prog.p_offset;
+
+        ret = -E_NO_MEM;
+        end = prog.p_va + prog.p_filesz;
+
+        while (start < end) {
+            if ((page = pgdir_alloc_page(mm->pgdir, la, perm)) == NULL) {
+                goto bad_cleanup_mmap;
+            }
+            off = start - la, size = PGSIZE - off, la += PGSIZE;
+            if (end < la) {
+                size -= la - end;
+            }
+
+            load_icode_read(fd, (void *)(page2kva(page) + off), size, from_offset);
+            start += size, from_offset += size;
+        }
+
+        end = prog.p_va + prog.p_memsz;
+        if (start < la) {
+            /* ph->p_memsz == ph->p_filesz */
+            if (start == end) {
+                continue ;
+            }
+            off = start + PGSIZE - la, size = PGSIZE - off;
+            if (end < la) {
+                size -= la - end;
+            }
+            memset(page2kva(page) + off, 0, size);
+            start += size;
+            assert((end < la && start == end) || (end >= la && start == la));
+        }
+        while (start < end) {
+            if ((page = pgdir_alloc_page(mm->pgdir, la, perm)) == NULL) {
+                goto bad_cleanup_mmap;
+            }
+            off = start - la, size = PGSIZE - off, la += PGSIZE;
+            if (end < la) {
+                size -= la - end;
+            }
+            memset(page2kva(page) + off, 0, size);
+            start += size;
+        }
+    }
+
+    vm_flags = VM_READ | VM_WRITE | VM_STACK;
+    if ((ret = mm_map(mm, USTACKTOP - USTACKSIZE, USTACKSIZE, vm_flags, NULL)) != 0) {
+        goto bad_cleanup_mmap;
+    }
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-PGSIZE , PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-2*PGSIZE , PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-3*PGSIZE , PTE_USER) != NULL);
+    assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-4*PGSIZE , PTE_USER) != NULL);
+    
+    mm_count_inc(mm);
+    current->mm = mm;
+    current->cr3 = PADDR(mm->pgdir);
+    lcr3(PADDR(mm->pgdir));
+
+    uint32_t cur_stacktop = USTACKTOP;
+    char *tmp_argv[EXEC_MAX_ARG_NUM];
+    if (argc > EXEC_MAX_ARG_NUM) {
+        argc = EXEC_MAX_ARG_NUM;
+    }
+
+    for (i = argc - 1; i >= 0; i--) {
+        cprintf("copy argv[%d] of %d\n", i, argc);
+        cur_stacktop -= strnlen(kargv[i], EXEC_MAX_ARG_LEN) + 1;
+        strcpy((char *)cur_stacktop, kargv[i]);
+        tmp_argv[i] = (char *)cur_stacktop;
+    }
+    // cprintf("cpy argvs done : %d\n", cur_stacktop);
+
+    cur_stacktop = ROUNDDOWN(cur_stacktop, sizeof(void *));
+    
+    char** cur_stacktop_as_pointer = (char **) cur_stacktop;
+    cur_stacktop_as_pointer -= argc + 1;
+    for (i = 0; i < argc; i++) {
+        *(cur_stacktop_as_pointer + i) = tmp_argv[i];
+    }
+    *(cur_stacktop_as_pointer + argc) = 0;
+
+    cur_stacktop = (uint32_t)(cur_stacktop_as_pointer-1);
+    *((uint32_t *)cur_stacktop) = argc;
+
+    // cprintf("cur_stacktop : %d\n", cur_stacktop);
+    // TODO
+
+    struct trapframe *tf = current->tf;
+    memset(tf, 0, sizeof(struct trapframe));
+
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = cur_stacktop;
+    tf->tf_eip = elf.e_entry;
+    tf->tf_eflags = FL_IF;
+    ret = 0;
+
+
+out:
+    return ret;
+bad_cleanup_mmap:
+    exit_mmap(mm);
+bad_elf_cleanup_pgdir:
+    put_pgdir(mm);
+bad_pgdir_cleanup_mm:
+    mm_destroy(mm);
+bad_mm:
+    goto out;
+
 }
 
 // this function isn't very correct in LAB8
