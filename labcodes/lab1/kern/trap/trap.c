@@ -203,7 +203,7 @@ trap_dispatch(struct trapframe *tf) {
         tmp_frame->tf_es = KERNEL_DS;
         tmp_frame->tf_fs = KERNEL_DS;
         tmp_frame->tf_gs = KERNEL_DS;
-        tmp_frame->tf_eflags = tf->tf_eflags | FL_IOPL_0;
+        tmp_frame->tf_eflags = tf->tf_eflags & (~FL_IOPL_3);
         *ret_esp = (uint32_t)tmp_frame;
         // check_syscall(tf);
         break;
