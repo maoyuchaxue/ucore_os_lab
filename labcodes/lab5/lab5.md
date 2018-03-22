@@ -226,7 +226,7 @@ wait可以等待进程号为pid的子进程结束。若pid指定为0，则会等
 
 >          ​                  (proc_init)          (do_wait)
 >          PROC_UNINIT ---> PROC_RUNNABLE ---> PROC_SLEEPING 
->          ​                 |          ↑                  |
+>          ​                 |          ↑  (wakeup_proc)   |
 >          ​       (do_exit) |          +------------------+
 >          ​                 ↓
 >          ​            PROC_ZOMBIE
