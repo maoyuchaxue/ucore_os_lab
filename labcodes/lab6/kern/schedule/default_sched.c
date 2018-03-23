@@ -93,6 +93,7 @@ stride_dequeue(struct run_queue *rq, struct proc_struct *proc) {
       *         list_del_init: remove a entry from the  list
       */
     rq->lab6_run_pool = skew_heap_remove(rq->lab6_run_pool, &(proc->lab6_run_pool), &proc_stride_comp_f);
+    rq->proc_num--;
 }
 /*
  * stride_pick_next pick the element from the ``run-queue'', with the
